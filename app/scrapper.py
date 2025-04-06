@@ -14,7 +14,10 @@ def setup_driver():
     options = Options()
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--headless")
+    options.add_argument("--window-size=1920,1080")
     return webdriver.Chrome(options=options)
+
 
 def scrape_linkedin(driver, job_role, location, max_jobs=10):
     url = f"https://www.linkedin.com/jobs/search/?keywords={urllib.parse.quote(job_role)}&location={urllib.parse.quote(location)}"
