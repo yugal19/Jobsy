@@ -8,13 +8,17 @@ from bs4 import BeautifulSoup
 import google.generativeai as genai
 
 # Configure Gemini API
-genai.configure(api_key="AIzaSyAdJ5A4Q-9dAhZe52HB-_1PtrTVlM0Huds")  # Replace with your actual key
+genai.configure(
+    api_key="AIzaSyAdJ5A4Q-9dAhZe52HB-_1PtrTVlM0Huds"
+)  # Replace with your actual key
+
 
 def setup_driver():
     options = Options()
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     return webdriver.Chrome(options=options)
+
 
 def scrape_linkedin(driver, job_role, location, max_jobs=10):
     url = f"https://www.linkedin.com/jobs/search/?keywords={urllib.parse.quote(job_role)}&location={urllib.parse.quote(location)}"
@@ -27,15 +31,18 @@ def scrape_linkedin(driver, job_role, location, max_jobs=10):
         company_elem = card.find("h4", class_="base-search-card__subtitle")
         link_elem = card.find("a", class_="base-card__full-link")
         if title_elem and company_elem and link_elem:
-            jobs.append({
-                "title": title_elem.get_text(strip=True),
-                "company": company_elem.get_text(strip=True),
-                "link": link_elem.get("href"),
-                "description": "",          # extracted tech keywords
-                "experience_required": "",  # extracted experience requirement
-                "site": "linkedin"
-            })
+            jobs.append(
+                {
+                    "title": title_elem.get_text(strip=True),
+                    "company": company_elem.get_text(strip=True),
+                    "link": link_elem.get("href"),
+                    "description": "",  # extracted tech keywords
+                    "experience_required": "",  # extracted experience requirement
+                    "site": "linkedin",
+                }
+            )
     return jobs
+
 
 def scrape_naukri(driver, job_role, location, skills, max_jobs=10):
     job_role_hyphen = job_role.lower().replace(" ", "-")
@@ -48,7 +55,11 @@ def scrape_naukri(driver, job_role, location, skills, max_jobs=10):
     time.sleep(3)
     soup = BeautifulSoup(driver.page_source, "html.parser")
     jobs = []
-    job_cards = soup.find_all("article", class_="jobTuple") or soup.find_all("div", class_="srp-jobtuple-wrapper")
+    job_cards = (
+        soup.find_all("article", class_="jobTupleHeader")
+        or soup.find_all("div", class_="srp-jobtuple-wrapper")
+        or soup.find_all("div", class_="styles_job-listing-container__OCfZC")
+    )
     for card in job_cards[:max_jobs]:
         title_elem = card.find("a", class_="title")
         if not title_elem:
@@ -57,22 +68,25 @@ def scrape_naukri(driver, job_role, location, skills, max_jobs=10):
         link = title_elem.get("href")
         company_elem = card.find("a", class_="comp-name")
         company = company_elem.get_text(strip=True) if company_elem else "N/A"
-        jobs.append({
-            "title": job_title,
-            "company": company,
-            "link": link,
-            "description": "",          # extracted tech keywords
-            "experience_required": "",  # extracted experience requirement
-            "site": "naukri"
-        })
+        jobs.append(
+            {
+                "title": job_title,
+                "company": company,
+                "link": link,
+                "description": "",  # extracted tech keywords
+                "experience_required": "",  # extracted experience requirement
+                "site": "naukri",
+            }
+        )
     return jobs
+
 
 def get_job_description(driver, job_link, site):
     driver.get(job_link)
     time.sleep(5)
     soup = BeautifulSoup(driver.page_source, "html.parser")
     full_description = "Description not found"
-    
+
     if site == "linkedin":
         desc_elem = soup.find("div", class_="description__text")
         if not desc_elem:
@@ -86,19 +100,43 @@ def get_job_description(driver, job_link, site):
             desc_elem = soup.find("div", id="jobDescriptionText")
         if not desc_elem:
             desc_elem = soup.find("section", class_="styles_job-desc-container__txpYf")
+        if not desc_elem:
+            desc_elem = soup.find(
+                "section", class_="styles_JDC__dang-inner-html__h0K4t"
+            )
     else:
         desc_elem = soup.find("div", class_="job-description")
-    
+
     if desc_elem:
         full_description = desc_elem.get_text(separator=" ", strip=True)
-    
+
     return full_description
+
 
 def extract_tech_keywords(text):
     tech_keywords_list = [
-        "Python", "Django", "Flask", "REST", "API", "JavaScript", "React",
-        "Node.js", "Angular", "Vue", "AWS", "Azure", "GCP", "Docker", "Kubernetes",
-        "SQL", "NoSQL", "Machine Learning", "Deep Learning", "Data Science", "Java", "C++"
+        "Python",
+        "Django",
+        "Flask",
+        "REST",
+        "API",
+        "JavaScript",
+        "React",
+        "Node.js",
+        "Angular",
+        "Vue",
+        "AWS",
+        "Azure",
+        "GCP",
+        "Docker",
+        "Kubernetes",
+        "SQL",
+        "NoSQL",
+        "Machine Learning",
+        "Deep Learning",
+        "Data Science",
+        "Java",
+        "C++",
     ]
     found = []
     lower_text = text.lower()
@@ -107,14 +145,16 @@ def extract_tech_keywords(text):
             found.append(keyword)
     return ", ".join(list(set(found)))
 
+
 def extract_experience(text):
     """
     Look for patterns like 'X years', 'X-Y years', or 'minimum X years'
     """
-    pattern = r'(\d+\s*(\+|to|-)?\s*\d*\s*years?)'
+    pattern = r"(\d+\s*(\+|to|-)?\s*\d*\s*years?)"
     matches = re.findall(pattern, text, flags=re.IGNORECASE)
     experiences = [match[0].strip() for match in matches]
     return ", ".join(set(experiences)) if experiences else "Not specified"
+
 
 def update_jobs_with_descriptions(driver, jobs):
     for job in jobs:
@@ -123,6 +163,7 @@ def update_jobs_with_descriptions(driver, jobs):
         job["description"] = extract_tech_keywords(full_desc)
         job["experience_required"] = extract_experience(full_desc)
     return jobs
+
 
 def rank_jobs_with_gemini(resume_text, jobs):
     # Define the JSON schema for the expected response
@@ -137,10 +178,18 @@ def rank_jobs_with_gemini(resume_text, jobs):
                 "description": {"type": "string"},
                 "experience_required": {"type": "string"},
                 "site": {"type": "string"},
-                "score": {"type": "number"}
+                "score": {"type": "number"},
             },
-            "required": ["title", "company", "link", "description", "experience_required", "site", "score"]
-        }
+            "required": [
+                "title",
+                "company",
+                "link",
+                "description",
+                "experience_required",
+                "site",
+                "score",
+            ],
+        },
     }
 
     prompt = f"""
@@ -156,7 +205,7 @@ Each job listing contains two key details:
 - "description": Technical keywords extracted from the job description.
 - "experience_required": The experience requirements extracted from the description.
 
-**Scoring Instructions:**
+*Scoring Instructions:*
 Compare the candidate's skills and experience with each job's details.
 Assign each job a match score between 0 and 100 (where 100 means a perfect match).
 The score should reflect how well the job's technical keywords and experience requirements align with the candidate's skills and experience.
@@ -165,7 +214,10 @@ For example, if the candidate's resume shows all the skills and the required exp
 Then, select exactly 5 jobs total with the condition that exactly 3 come from LinkedIn and exactly 2 come from Naukri.
 Rank these selected jobs from most relevant (highest score) to least relevant.
 
-**Output Format:**  
+*DISCLAIMER*
+PLEASE DO IT PRECISELY AND ACCURATELY OF GIVING SCORES AND LISTING JOBS.
+
+*Output Format:*  
 Return a valid JSON list of dictionaries following the provided schema.
 """
     try:
@@ -173,9 +225,8 @@ Return a valid JSON list of dictionaries following the provided schema.
         response = model.generate_content(
             prompt,
             generation_config=genai.GenerationConfig(
-                response_mime_type="application/json",
-                response_schema=response_schema
-            )
+                response_mime_type="application/json", response_schema=response_schema
+            ),
         )
         raw_response = response.text
         print("Gemini API Raw Response:", raw_response)
@@ -194,19 +245,26 @@ Return a valid JSON list of dictionaries following the provided schema.
         def filter_top_jobs(jobs_list):
             linkedin_jobs = [job for job in jobs_list if job.get("site") == "linkedin"]
             naukri_jobs = [job for job in jobs_list if job.get("site") == "naukri"]
-            linkedin_sorted = sorted(linkedin_jobs, key=lambda x: x.get("score", 0), reverse=True)[:3]
-            naukri_sorted = sorted(naukri_jobs, key=lambda x: x.get("score", 0), reverse=True)[:2]
+            linkedin_sorted = sorted(
+                linkedin_jobs, key=lambda x: x.get("score", 0), reverse=True
+            )[:3]
+            naukri_sorted = sorted(
+                naukri_jobs, key=lambda x: x.get("score", 0), reverse=True
+            )[:2]
             return linkedin_sorted + naukri_sorted
 
-        if not (len(ranked_jobs) == 5 and 
-                sum(1 for job in ranked_jobs if job.get("site") == "linkedin") == 3 and 
-                sum(1 for job in ranked_jobs if job.get("site") == "naukri") == 2):
+        if not (
+            len(ranked_jobs) == 5
+            and sum(1 for job in ranked_jobs if job.get("site") == "linkedin") == 3
+            and sum(1 for job in ranked_jobs if job.get("site") == "naukri") == 2
+        ):
             ranked_jobs = filter_top_jobs(ranked_jobs)
 
         return ranked_jobs, parsed_gemini_response
     except Exception as e:
         print(f"Error with Gemini API: {e}")
         return jobs, f"Error: {e}"
+
 
 def get_all_jobs(job_role, location, skills, experience):
     driver = setup_driver()
@@ -217,6 +275,7 @@ def get_all_jobs(job_role, location, skills, experience):
     naukri_jobs = scrape_naukri(driver, job_role, location, skills, max_jobs=10)
     print(f"Found {len(naukri_jobs)} jobs on Naukri.")
     all_jobs = linkedin_jobs + naukri_jobs
+    print(naukri_jobs)
     all_jobs = update_jobs_with_descriptions(driver, all_jobs)
     driver.quit()
     if not all_jobs:

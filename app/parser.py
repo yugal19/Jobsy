@@ -3,7 +3,6 @@ import google.generativeai as genai
 import json
 import re
 
-# Configure Gemini API
 genai.configure(api_key="AIzaSyAdJ5A4Q-9dAhZe52HB-_1PtrTVlM0Huds")
 
 
@@ -38,13 +37,14 @@ def parse_resume_text(resume_text):
         return None
 
     prompt = (
-        "Extract the following details from the resume text:\n"
+        "You are an intelligent resume parser. From the given resume text, extract and return the following details:\n"
         "- Full Name\n"
-        "- Skills (list of skills)\n"
         "- Email\n"
         "- Phone Number\n"
-        "- Experience (if available, otherwise return an empty list [])\n"
-        "Return JSON strictly in the given schema."
+        "- Skills (as a list of skills)\n"
+        "- Experience (as a list of objects with 'company' and 'jobTitle' and if there is no such experience return a empty list )\n"
+        "- Education (extract both school and college details. Include name, degree/standard, and marks as percentage or CGPA wherever mentioned.)\n\n"
+        "Return strictly a valid JSON object using this schema."
     )
 
     schema = {
@@ -64,6 +64,18 @@ def parse_resume_text(resume_text):
                     },
                 },
             },
+            "education": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "institution": {"type": "string"},
+                        "level": {"type": "string"},  # School/College
+                        "degree": {"type": "string"},
+                        "score": {"type": "string"},  # Percentage or CGPA
+                    },
+                },
+            },
         },
     }
 
@@ -71,7 +83,7 @@ def parse_resume_text(resume_text):
 
     try:
         response = model.generate_content(
-            prompt + f"\n\nResume Text: {resume_text}",
+            prompt + f"\n\nResume Text:\n{resume_text}",
             generation_config=genai.GenerationConfig(
                 response_mime_type="application/json",
                 response_schema=schema,
@@ -84,6 +96,9 @@ def parse_resume_text(resume_text):
 
         if not parsed_data.get("experience"):
             parsed_data["experience"] = []
+
+        if not parsed_data.get("education"):
+            parsed_data["education"] = []
 
         return parsed_data
 
@@ -104,3 +119,4 @@ def parse_resume(resume_path):
         return extracted_data
     else:
         return None
+
