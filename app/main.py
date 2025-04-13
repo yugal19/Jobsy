@@ -6,6 +6,7 @@ from fastapi.encoders import jsonable_encoder
 import os
 import shutil
 import logging
+from fastapi.middleware.cors import CORSMiddleware  
 from pydantic import BaseModel, EmailStr
 from passlib.context import CryptContext
 from app.parser import parse_resume
@@ -40,6 +41,16 @@ class UserDetails(BaseModel):
 class UserLogin(BaseModel):
     email: str
     password: str
+
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # or replace * with your frontend domain
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 
 
 @app.post("/user-register")
