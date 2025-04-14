@@ -34,7 +34,7 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 class UserDetails(BaseModel):
     full_name: str
-    email: EmailStr
+    email: str
     password: str
 
     
