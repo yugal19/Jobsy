@@ -6,7 +6,7 @@ from fastapi.encoders import jsonable_encoder
 import os
 import shutil
 import logging
-from fastapi.middleware.cors import CORSMiddleware  
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, EmailStr
 from passlib.context import CryptContext
 from app.parser import parse_resume
@@ -37,7 +37,7 @@ class UserDetails(BaseModel):
     email: str
     password: str
 
-    
+
 class UserLogin(BaseModel):
     email: str
     password: str
@@ -50,7 +50,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
 
 
 @app.post("/user-register")
@@ -83,8 +82,8 @@ async def login(userlogin: UserLogin):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid email or password"
         )
-
-    return {"message": "Login successful!"}
+    user_id = str(user["_id"])
+    return {"message": "Login successful!", "user_id": user_id}
 
 
 # @app.post("/parse-resume/")
@@ -162,17 +161,16 @@ async def login(userlogin: UserLogin):
 #             status_code=500, content={"error": f"Internal server error: {e}"}
 #         )
 
+
 def convert_mongo_obj(doc):
-    return {
-        k: str(v) if isinstance(v, ObjectId) else v
-        for k, v in doc.items()
-    }
+    return {k: str(v) if isinstance(v, ObjectId) else v for k, v in doc.items()}
+
 
 @app.post("/find-jobs")
 async def find_jobs(
     user_id: str = Query(..., description="Registered user's ID"),
     job_role: str = Query(..., description="Desired job role"),
-    location: str = Query(None, description="Preferred job location")
+    location: str = Query(None, description="Preferred job location"),
 ):
     try:
         user_obj_id = ObjectId(user_id)
@@ -181,13 +179,15 @@ async def find_jobs(
 
     user_present = await users_collection.find_one({"_id": user_obj_id})
     if not user_present:
-        raise HTTPException(status_code=404, detail="User not found. Please register first.")
+        raise HTTPException(
+            status_code=404, detail="User not found. Please register first."
+        )
 
     resume = await resumes_collection.find_one({"user_id": user_id})
     if not resume:
         raise HTTPException(
             status_code=404,
-            detail="Parsed resume not found. Please upload and parse your resume first."
+            detail="Parsed resume not found. Please upload and parse your resume first.",
         )
 
     skills = resume.get("skills", [])
@@ -201,8 +201,10 @@ async def find_jobs(
 
     gemini_response = get_all_jobs(job_role, location, skills, experience_data)
     if not gemini_response:
-        return JSONResponse(status_code=200, content={"message": "No matching jobs found."})
-    
+        return JSONResponse(
+            status_code=200, content={"message": "No matching jobs found."}
+        )
+
     jobs = []
     for job in gemini_response:
         job["user_id"] = user_id
@@ -213,13 +215,13 @@ async def find_jobs(
     response_content = {
         "message": "Matching jobs fetched and stored successfully.",
         "jobs_found": len(jobs),
-        "all_jobs": jobs
+        "all_jobs": jobs,
     }
     return JSONResponse(status_code=200, content=jsonable_encoder(response_content))
 
 
-
 # Assume that users_collection, resumes_collection, UPLOAD_DIR, logger, etc. are already defined
+
 
 def clean_obj(obj):
     """
@@ -235,10 +237,11 @@ def clean_obj(obj):
     else:
         return obj
 
+
 @app.post("/get-parse-resume")
 async def get_parse_resume(
     file: UploadFile = File(...),
-    user_id: str = Query(..., description="Registered user's ID")
+    user_id: str = Query(..., description="Registered user's ID"),
 ):
     if file.content_type != "application/pdf":
         raise HTTPException(status_code=400, detail="Only PDF files are allowed")
@@ -250,7 +253,9 @@ async def get_parse_resume(
 
     user = await users_collection.find_one({"_id": user_obj_id})
     if not user:
-        raise HTTPException(status_code=404, detail="User not found. Please register first.")
+        raise HTTPException(
+            status_code=404, detail="User not found. Please register first."
+        )
 
     file_path = os.path.join(UPLOAD_DIR, file.filename)
 
@@ -263,7 +268,9 @@ async def get_parse_resume(
         # Parse the resume file
         parsed_data = parse_resume(file_path)
         if not parsed_data:
-            return JSONResponse(status_code=400, content={"error": "Failed to parse resume."})
+            return JSONResponse(
+                status_code=400, content={"error": "Failed to parse resume."}
+            )
 
         # Extract and clean parsed fields
         skills = parsed_data.get("skills", [])
@@ -290,10 +297,12 @@ async def get_parse_resume(
         # Return a cleaned and serializable response
         return JSONResponse(
             status_code=200,
-            content=jsonable_encoder({
-                "message": "Resume parsed and saved successfully.",
-                "parsed_data": clean_obj(resume_data),
-            })
+            content=jsonable_encoder(
+                {
+                    "message": "Resume parsed and saved successfully.",
+                    "parsed_data": clean_obj(resume_data),
+                }
+            ),
         )
 
     except Exception as e:
@@ -354,31 +363,35 @@ async def user_profile(user_email: str):
 @app.put("/apply-job")
 async def apply_job(
     user_id: str = Query(..., description="Registered user's ID"),
-    job_id: str = Query(..., description="Job ID to mark as applied")
+    job_id: str = Query(..., description="Job ID to mark as applied"),
 ):
     try:
         user_obj_id = ObjectId(user_id)
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid user ID format")
-    
+
     user = await users_collection.find_one({"_id": user_obj_id})
     if not user:
-        raise HTTPException(status_code=404, detail="User not found. Please register first.")
-    
+        raise HTTPException(
+            status_code=404, detail="User not found. Please register first."
+        )
+
     try:
         job_obj_id = ObjectId(job_id)
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid job ID format")
-    
+
     update_result = await job_collection.update_one(
-        {"_id": job_obj_id, "user_id": user_id},
-        {"$set": {"applied": True}}
+        {"_id": job_obj_id, "user_id": user_id}, {"$set": {"applied": True}}
     )
     if update_result.modified_count == 0:
-        raise HTTPException(status_code=404, detail="Job not found or already marked as applied")
-    
+        raise HTTPException(
+            status_code=404, detail="Job not found or already marked as applied"
+        )
+
     return {"message": "Job marked as applied."}
-    
+
+
 @app.get("/applied-jobs")
 async def get_applied_jobs(
     user_id: str = Query(..., description="Registered user's ID")
@@ -387,18 +400,23 @@ async def get_applied_jobs(
         user_obj_id = ObjectId(user_id)
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid user ID format")
-    
+
     user = await users_collection.find_one({"_id": user_obj_id})
     if not user:
-        raise HTTPException(status_code=404, detail="User not found. Please register first.")
-    
+        raise HTTPException(
+            status_code=404, detail="User not found. Please register first."
+        )
+
     jobs_cursor = job_collection.find({"user_id": user_id, "applied": True})
     applied_jobs = []
     async for job in jobs_cursor:
         job["_id"] = str(job["_id"])
         applied_jobs.append(job)
-    
-    return JSONResponse(status_code=200, content=jsonable_encoder({"applied_jobs": applied_jobs}))
+
+    return JSONResponse(
+        status_code=200, content=jsonable_encoder({"applied_jobs": applied_jobs})
+    )
+
 
 @app.get("/")
 async def root():
