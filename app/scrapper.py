@@ -4,22 +4,44 @@ import re
 import urllib.parse
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.service import Service
+# from webdriver_manager.chrome import ChromeDriverManager
+from webdriver_manager.chrome import ChromeDriverManager
 from bs4 import BeautifulSoup
 import google.generativeai as genai
+import os 
 
 # Configure Gemini API
 genai.configure(
     api_key="AIzaSyAdJ5A4Q-9dAhZe52HB-_1PtrTVlM0Huds"
 )  # Replace with your actual key
 
-
 def setup_driver():
     options = Options()
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
-    # options.add_argument("--headless")
-    # options.add_argument("--window-size=1920,1080")
-    return webdriver.Chrome(options=options)
+    
+    # Common configuration for all environments
+    options.add_argument("--disable-gpu")
+    options.add_argument("--window-size=1920,1080")
+    
+    # Windows-specific configuration
+    if os.name == 'nt':  # Windows
+        service = Service(ChromeDriverManager().install())
+    
+    # Render/Linux configuration
+    else:
+        options.add_argument("--no-sandbox")  # Critical for Render
+        options.add_argument("--disable-dev-shm-usage")  # Prevents crashes
+        options.add_argument("--headless")  # Must be headless
+        
+        # Explicit paths for Render
+        chrome_bin = os.environ.get("CHROME_PATH", "/usr/bin/chromium-browser")
+        options.binary_location = chrome_bin
+        
+        # Use system chromedriver instead of ChromeDriverManager for stability
+        service = Service(executable_path="/usr/bin/chromedriver")
+    
+    return webdriver.Chrome(service=service, options=options)
+
 
 
 def scrape_linkedin(driver, job_role, location, max_jobs=10):

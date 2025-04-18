@@ -2,12 +2,12 @@ services:
   - type: web
     name: job-scraper-api
     runtime: python
-    buildCommand: ./build.sh && pip install -r app/requirements.txt  # Fix: Added "-r"
+    buildCommand: ./build.sh && pip install -r app/requirements.txt
     startCommand: gunicorn app.main:app --workers 4 --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:10000
     envVars:
       - key: PYTHON_VERSION
-        value: "3.9.7"  # Add quotes
-      - key: CHROME_PATH  # Fixed typo
+        value: "3.9.7"
+      - key: CHROME_PATH
         value: "/usr/bin/chromium-browser"
-      - key: CHROMEDRIVER_PATH  # Fixed typo
+      - key: CHROMEDRIVER_PATH
         value: "/usr/bin/chromedriver"
