@@ -15,31 +15,28 @@ import os
 genai.configure(
     api_key="AIzaSyAdJ5A4Q-9dAhZe52HB-_1PtrTVlM0Huds"
 )  # Replace with your actual key
-
 def setup_driver():
     options = Options()
     
-    # Common configuration for all environments
+    # ✅ Universal Chrome options
     options.add_argument("--disable-gpu")
     options.add_argument("--window-size=1920,1080")
-    
-    # Windows-specific configuration
-    if os.name == 'nt':  # Windows
-        service = Service(ChromeDriverManager().install())
-    
-    # Render/Linux configuration
+    options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--no-sandbox")
+    options.add_argument("--headless=new")  # ✅ More stable headless in newer Chrome versions
+    options.add_argument("--disable-blink-features=AutomationControlled")  # ✅ Prevent detection
+
+    # ✅ Check if running on Render (Linux)
+    if os.name != "nt":
+        chrome_path = os.getenv("CHROME_PATH", "/usr/bin/chromium-browser")
+        chromedriver_path = os.getenv("CHROMEDRIVER_PATH", "/usr/bin/chromedriver")
+        
+        options.binary_location = chrome_path
+        service = Service(executable_path=chromedriver_path)
     else:
-        options.add_argument("--no-sandbox")  # Critical for Render
-        options.add_argument("--disable-dev-shm-usage")  # Prevents crashes
-        options.add_argument("--headless")  # Must be headless
-        
-        # Explicit paths for Render
-        chrome_bin = os.environ.get("CHROME_PATH", "/usr/bin/chromium-browser")
-        options.binary_location = chrome_bin
-        
-        # Use system chromedriver instead of ChromeDriverManager for stability
-        service = Service(executable_path="/usr/bin/chromedriver")
-    
+        # ✅ Local Windows (use webdriver-manager)
+        service = Service(ChromeDriverManager().install())
+
     return webdriver.Chrome(service=service, options=options)
 
 
