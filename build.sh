@@ -29,4 +29,4 @@ ln -s /usr/bin/chromium-browser /usr/bin/google-chrome || true
 
 # Install Python dependencies
 pip install --upgrade pip
-pip install -r app/requirements.txt
+pip install -r requirements.txt
