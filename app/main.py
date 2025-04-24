@@ -14,7 +14,7 @@ from app.scrapper import get_all_jobs
 
 app = FastAPI()
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO) 
 logger = logging.getLogger(__name__)
 
 UPLOAD_DIR = "uploads"
@@ -218,10 +218,6 @@ async def find_jobs(
         "all_jobs": jobs,
     }
     return JSONResponse(status_code=200, content=jsonable_encoder(response_content))
-
-
-# Assume that users_collection, resumes_collection, UPLOAD_DIR, logger, etc. are already defined
-
 
 def clean_obj(obj):
     """

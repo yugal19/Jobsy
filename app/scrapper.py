@@ -4,65 +4,121 @@ import re
 import urllib.parse
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.chrome.service import Service
+from selenium import webdriver
+
 # from webdriver_manager.chrome import ChromeDriverManager
-from webdriver_manager.chrome import ChromeDriverManager
+# from selenium.webdriver.common.by import By
+# from selenium.webdriver.common.keys import Keys
+from selenium.webdriver.chrome.service import Service
 from bs4 import BeautifulSoup
 import google.generativeai as genai
-import os 
 
 # Configure Gemini API
 genai.configure(
     api_key="AIzaSyAdJ5A4Q-9dAhZe52HB-_1PtrTVlM0Huds"
 )  # Replace with your actual key
-def setup_driver():
+
+
+def setup_driver(headless=True):
     options = Options()
-    
-    # ✅ Universal Chrome options
-    options.add_argument("--disable-gpu")
-    options.add_argument("--window-size=1920,1080")
-    options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--no-sandbox")
-    options.add_argument("--headless=new")  # ✅ More stable headless in newer Chrome versions
-    options.add_argument("--disable-blink-features=AutomationControlled")  # ✅ Prevent detection
+    options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--window-size=1920,1080")
+    options.add_argument("--disable-blink-features=AutomationControlled")
+    options.add_experimental_option("excludeSwitches", ["enable-automation"])
+    options.add_experimental_option("useAutomationExtension", False)
+    user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+    options.add_argument(f"user-agent={user_agent}")
+    if headless:
+        options.add_argument("--headless=new")  # new headless mode
 
-    # ✅ Check if running on Render (Linux)
-    if os.name != "nt":
-        chrome_path = os.getenv("CHROME_PATH", "/usr/bin/chromium-browser")
-        chromedriver_path = os.getenv("CHROMEDRIVER_PATH", "/usr/bin/chromedriver")
-        
-        options.binary_location = chrome_path
-        service = Service(executable_path=chromedriver_path)
-    else:
-        # ✅ Local Windows (use webdriver-manager)
-        service = Service(ChromeDriverManager().install())
-
-    return webdriver.Chrome(service=service, options=options)
+    driver = webdriver.Chrome(options=options)
+    driver.execute_script(
+        "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
+    )
+    driver.execute_cdp_cmd("Network.setUserAgentOverride", {"userAgent": user_agent})
+    return driver
 
 
+def scrape_linkedin(driver, job_role, location, skills, max_jobs=10):
+    """Scrape LinkedIn jobs ensuring all company names are unique"""
+    try:
+        url = f"https://www.linkedin.com/jobs/search/?keywords={urllib.parse.quote(job_role)}&location={urllib.parse.quote(location)}"
+        driver.get(url)
+        time.sleep(5)  # Initial load wait
 
-def scrape_linkedin(driver, job_role, location, max_jobs=10):
-    url = f"https://www.linkedin.com/jobs/search/?keywords={urllib.parse.quote(job_role)}&location={urllib.parse.quote(location)}"
-    driver.get(url)
-    time.sleep(5)
-    soup = BeautifulSoup(driver.page_source, "html.parser")
-    jobs = []
-    for card in soup.find_all("div", class_="base-search-card")[:max_jobs]:
-        title_elem = card.find("h3", class_="base-search-card__title")
-        company_elem = card.find("h4", class_="base-search-card__subtitle")
-        link_elem = card.find("a", class_="base-card__full-link")
-        if title_elem and company_elem and link_elem:
-            jobs.append(
-                {
-                    "title": title_elem.get_text(strip=True),
-                    "company": company_elem.get_text(strip=True),
-                    "link": link_elem.get("href"),
-                    "description": "",  # extracted tech keywords
-                    "experience_required": "",  # extracted experience requirement
-                    "site": "linkedin",
-                }
-            )
-    return jobs
+        # Scroll to load more jobs
+        for _ in range(2):
+            driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+            time.sleep(2)
+
+        soup = BeautifulSoup(driver.page_source, "html.parser")
+        jobs = []
+        seen_companies = set()  # Track companies we've already added
+
+        # Multiple selector patterns for job cards
+        job_cards = (
+            soup.select("div.base-search-card")
+            or soup.select("li.jobs-search-results__list-item")
+            or soup.select("div.job-card-container")
+        )
+
+        for card in job_cards:
+            try:
+                # Extract company name with multiple selector options
+                company_elem = (
+                    card.select_one("h4.base-search-card__subtitle a")
+                    or card.select_one("a.job-card-container__company-name")
+                    or card.select_one("a.hidden-nested-link")
+                )
+
+                if not company_elem:
+                    continue
+
+                company = company_elem.get_text(strip=True)
+
+                # Skip if we already have this company
+                if company in seen_companies:
+                    continue
+
+                seen_companies.add(company)  # Mark company as seen
+
+                # Extract other job details
+                title_elem = card.select_one(
+                    "h3.base-search-card__title"
+                ) or card.select_one("a.job-card-list__title")
+                title = title_elem.get_text(strip=True) if title_elem else "N/A"
+
+                link_elem = card.select_one(
+                    "a.base-card__full-link"
+                ) or card.select_one("a.job-card-container__link")
+                link = link_elem.get("href", "").split("?")[0] if link_elem else "N/A"
+
+                # Build job record
+                jobs.append(
+                    {
+                        "title": title,
+                        "company": company,
+                        "link": link,
+                        "description": "",
+                        "experience_required": "",
+                        "site": "linkedin",
+                    }
+                )
+
+                # Stop when we have enough unique jobs
+                if len(jobs) >= max_jobs:
+                    break
+
+            except Exception as e:
+                print(f"Error processing job card: {e}")
+                continue
+
+        return jobs
+
+    except Exception as e:
+        print(f"LinkedIn scraping failed: {e}")
+        return []
 
 
 def scrape_naukri(driver, job_role, location, skills, max_jobs=10):
@@ -76,10 +132,8 @@ def scrape_naukri(driver, job_role, location, skills, max_jobs=10):
     time.sleep(3)
     soup = BeautifulSoup(driver.page_source, "html.parser")
     jobs = []
-    job_cards = (
-        soup.find_all("article", class_="jobTupleHeader")
-        or soup.find_all("div", class_="srp-jobtuple-wrapper")
-        or soup.find_all("div", class_="styles_job-listing-container__OCfZC")
+    job_cards = soup.find_all("article", class_="jobTuple") or soup.find_all(
+        "div", class_="srp-jobtuple-wrapper"
     )
     for card in job_cards[:max_jobs]:
         title_elem = card.find("a", class_="title")
@@ -121,10 +175,6 @@ def get_job_description(driver, job_link, site):
             desc_elem = soup.find("div", id="jobDescriptionText")
         if not desc_elem:
             desc_elem = soup.find("section", class_="styles_job-desc-container__txpYf")
-        if not desc_elem:
-            desc_elem = soup.find(
-                "section", class_="styles_JDC__dang-inner-html__h0K4t"
-            )
     else:
         desc_elem = soup.find("div", class_="job-description")
 
@@ -135,36 +185,82 @@ def get_job_description(driver, job_link, site):
 
 
 def extract_tech_keywords(text):
-    tech_keywords_list = [
-        "Python",
-        "Django",
-        "Flask",
-        "REST",
-        "API",
-        "JavaScript",
-        "React",
-        "Node.js",
-        "Angular",
-        "Vue",
-        "AWS",
-        "Azure",
-        "GCP",
-        "Docker",
-        "Kubernetes",
-        "SQL",
-        "NoSQL",
-        "Machine Learning",
-        "Deep Learning",
-        "Data Science",
-        "Java",
-        "C++",
-    ]
-    found = []
+    """
+    Enhanced tech keyword extraction with:
+    - More comprehensive keyword list
+    - Better matching (whole word matching)
+    - Skill categories
+    """
+    if not text or not isinstance(text, str):
+        return ""
+
+    tech_keywords = {
+        "Programming Languages": [
+            "Python",
+            "Java",
+            "JavaScript",
+            "C++",
+            "C#",
+            "Go",
+            "Rust",
+            "TypeScript",
+            "Swift",
+            "Kotlin",
+        ],
+        "Web Development": [
+            "HTML",
+            "CSS",
+            "React",
+            "Angular",
+            "Vue",
+            "Django",
+            "Flask",
+            "Node.js",
+            "Express",
+            "Spring",
+        ],
+        "Cloud/DevOps": [
+            "AWS",
+            "Azure",
+            "GCP",
+            "Docker",
+            "Kubernetes",
+            "Terraform",
+            "CI/CD",
+            "Jenkins",
+            "Ansible",
+        ],
+        "Data": [
+            "SQL",
+            "NoSQL",
+            "MySQL",
+            "PostgreSQL",
+            "MongoDB",
+            "Redis",
+            "Data Science",
+            "Machine Learning",
+            "Deep Learning",
+            "TensorFlow",
+            "PyTorch",
+        ],
+        "APIs": ["REST", "GraphQL", "gRPC", "API", "Microservices"],
+        "Other": ["Git", "Linux", "Agile", "Scrum", "JIRA"],
+    }
+
+    found_keywords = set()
     lower_text = text.lower()
-    for keyword in tech_keywords_list:
-        if keyword.lower() in lower_text:
-            found.append(keyword)
-    return ", ".join(list(set(found)))
+
+    for category, keywords in tech_keywords.items():
+        for keyword in keywords:
+            # Use regex for whole word matching to avoid false positives
+            if re.search(r"\b" + re.escape(keyword.lower()) + r"\b", lower_text):
+                found_keywords.add(keyword)
+
+    return (
+        ", ".join(sorted(found_keywords))
+        if found_keywords
+        else "No specific tech requirements found"
+    )
 
 
 def extract_experience(text):
@@ -229,14 +325,12 @@ Each job listing contains two key details:
 *Scoring Instructions:*
 Compare the candidate's skills and experience with each job's details.
 Assign each job a match score between 0 and 100 (where 100 means a perfect match).
+And also that minimum score assigned to any job must be 50 that is i want that each job post should have greater then equal to 50 score.
 The score should reflect how well the job's technical keywords and experience requirements align with the candidate's skills and experience.
 For example, if the candidate's resume shows all the skills and the required experience is met or exceeded, the score should be close to 100. Lower scores indicate a weaker match.
 
 Then, select exactly 5 jobs total with the condition that exactly 3 come from LinkedIn and exactly 2 come from Naukri.
 Rank these selected jobs from most relevant (highest score) to least relevant.
-
-*DISCLAIMER*
-PLEASE DO IT PRECISELY AND ACCURATELY OF GIVING SCORES AND LISTING JOBS.
 
 *Output Format:*  
 Return a valid JSON list of dictionaries following the provided schema.
@@ -290,13 +384,12 @@ Return a valid JSON list of dictionaries following the provided schema.
 def get_all_jobs(job_role, location, skills, experience):
     driver = setup_driver()
     print("Scraping LinkedIn...")
-    linkedin_jobs = scrape_linkedin(driver, job_role, location, max_jobs=10)
+    linkedin_jobs = scrape_linkedin(driver, job_role, location, skills, max_jobs=10)
     print(f"Found {len(linkedin_jobs)} jobs on LinkedIn.")
     print("Scraping Naukri...")
     naukri_jobs = scrape_naukri(driver, job_role, location, skills, max_jobs=10)
     print(f"Found {len(naukri_jobs)} jobs on Naukri.")
     all_jobs = linkedin_jobs + naukri_jobs
-    print(naukri_jobs)
     all_jobs = update_jobs_with_descriptions(driver, all_jobs)
     driver.quit()
     if not all_jobs:
