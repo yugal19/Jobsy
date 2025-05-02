@@ -37,15 +37,22 @@ def parse_resume_text(resume_text):
         return None
 
     prompt = (
-        "You are an intelligent resume parser. From the given resume text, extract and return the following details:\n"
+        "You are an intelligent and highly accurate resume parser. Carefully read the given resume text and extract ONLY the following details:\n"
         "- Full Name\n"
         "- Email\n"
         "- Phone Number\n"
-        "- Skills (as a list of skills)\n"
-        "- Experience (as a list of objects with 'company' and 'jobTitle' and if there is no such experience return a empty list )\n"
-        "- Education (extract both school and college details. Include name, degree/standard, and marks as percentage or CGPA wherever mentioned.)\n\n"
-        "Return strictly a valid JSON object using this schema."
+        "- Skills (as a list of individual skills)\n"
+        "- Experience (as a list of objects with 'company' and 'jobTitle').\n"
+        "  * IMPORTANT RULES for Experience extraction:\n"
+        "    - Include ONLY real professional experiences like internships, part-time jobs, full-time jobs, or freelancing work.\n"
+        "    - An experience MUST mention a valid company, organization, or client name.\n"
+        "    - There should be an indication of formal work (job title, internship role, freelancing, etc.).\n"
+        "    - DO NOT include college clubs, student societies, event participation, hackathons, competitions, academic projects, or volunteering unless it is with a recognized external organization.\n"
+        "    - If no valid company or organization is mentioned, DO NOT add it to the experience list.\n"
+        "- Education (extract both school and college details separately. For each, include institution name, degree/standard, and marks as percentage or CGPA, if available.)\n\n"
+        "Return STRICTLY a valid JSON object matching this schema. DO NOT add any extra fields, text, or explanations outside the JSON object."
     )
+
 
     schema = {
         "type": "object",

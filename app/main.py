@@ -4,6 +4,7 @@ from motor.motor_asyncio import AsyncIOMotorClient
 from bson import ObjectId
 from fastapi.encoders import jsonable_encoder
 import os
+import random
 import shutil
 import logging
 from fastapi.middleware.cors import CORSMiddleware
@@ -14,7 +15,7 @@ from app.scrapper import get_all_jobs
 
 app = FastAPI()
 
-logging.basicConfig(level=logging.INFO) 
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 UPLOAD_DIR = "uploads"
@@ -28,6 +29,7 @@ db = client[DB_NAME]
 users_collection = db["user"]
 resumes_collection = db["parse_resume"]
 job_collection = db["user_jobs"]
+recommended_jobs_collection = db["recommended_jobs_collection"]
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
@@ -219,6 +221,7 @@ async def find_jobs(
     }
     return JSONResponse(status_code=200, content=jsonable_encoder(response_content))
 
+
 def clean_obj(obj):
     """
     Recursively converts ObjectId values and other non-serializable items in a structure
@@ -232,7 +235,198 @@ def clean_obj(obj):
         return str(obj)
     else:
         return obj
+    
 
+@app.post("/scrape-and-store-recommended-jobs")
+async def scrape_and_store_recommended_jobs(
+    user_id: str = Query(..., description="User ID to fetch resume data"),
+    job_role: str = Query(..., description="Desired job role"),
+    location: str = Query(None, description="Preferred job location (default: Remote)"),
+):
+    try:
+        user_obj_id = ObjectId(user_id)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid user ID format")
+
+    # Validate user
+    user = await users_collection.find_one({"_id": user_obj_id})
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found.")
+
+    # Get parsed resume
+    resume = await resumes_collection.find_one({"user_id": user_id})
+    if not resume:
+        raise HTTPException(status_code=404, detail="Parsed resume not found.")
+
+    # Extract user profile details
+    skills = resume.get("skills", [])
+    experience_data = resume.get("experience", [])
+    location = location or resume.get("location", "Remote")
+
+    logger.info(
+        f"Scraping jobs for role={job_role}, location={location}, skills={skills}"
+    )
+
+    # Call scraper
+    scraped_jobs = get_all_jobs(job_role, location, skills, experience_data)
+    if not scraped_jobs:
+        return JSONResponse(
+            status_code=200, content={"message": "No matching jobs found."}
+        )
+
+    stored_jobs = []
+    for job in scraped_jobs:
+        # Insert job into the recommended_jobs_collection
+        result = await recommended_jobs_collection.insert_one(job)
+        job["_id"] = result.inserted_id  # Add the inserted _id to the job data
+        stored_jobs.append(convert_mongo_obj(job))
+
+    return JSONResponse(
+        status_code=200,
+        content=jsonable_encoder(
+            {
+                "message": "Jobs scraped and stored successfully in recommended_jobs.",
+                "new_jobs_added": len(stored_jobs),
+                "sample_jobs": stored_jobs,  # Preview of the first 5 jobs
+            }
+        ),
+    )
+    
+    
+def sanitize_job(doc: dict) -> dict:
+    """
+    Convert MongoDB document so it's JSON serializable:
+    - _id → id (str)
+    - Any other ObjectId fields → str
+    """
+    job = doc.copy()
+    # Convert the MongoDB _id to a string id
+    if "_id" in job:
+        job["id"] = str(job.pop("_id"))
+    # Convert user_id if it's an ObjectId
+    if "user_id" in job and isinstance(job["user_id"], ObjectId):
+        job["user_id"] = str(job["user_id"])
+    return job
+
+
+@app.get("/recommended-jobs")
+async def get_recommended_jobs_for_user(
+    user_id: str = Query(..., description="User ID to fetch recommended jobs")
+):
+    # 1. Validate user ID
+    try:
+        user_obj_id = ObjectId(user_id)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid user ID format")
+
+    # 2. Ensure user exists
+    user = await users_collection.find_one({"_id": user_obj_id})
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found.")
+
+    # 3. Load parsed resume (use ObjectId for lookup if that’s how you stored it)
+    resume = await resumes_collection.find_one({"user_id": user_id})
+    if not resume:
+        raise HTTPException(
+            status_code=404,
+            detail="Resume not found. Please upload and parse your resume first.",
+        )
+
+    # 4. Extract and normalize user skills
+    raw_skills = resume.get("skills", [])
+    if not isinstance(raw_skills, list):
+        raw_skills = []
+    user_skills = [s.strip().lower() for s in raw_skills if isinstance(s, str)]
+
+    # 5. Define important matching keywords
+    important_keywords = [
+        "python", "java", "javascript", "c++", "c#", "go", "ruby", "php", "swift",
+        "kotlin", "django", "flask", "spring", "react", "angular", "vue", "node.js",
+        "express", "laravel", "docker", "kubernetes", "aws", "azure", "gcp", "devops",
+        "terraform", "ansible", "data analyst", "data scientist", "machine learning",
+        "ml engineer", "ai engineer", "r", "pandas", "numpy", "tensorflow", "pytorch",
+        "spark", "hadoop", "sql", "nosql", "frontend developer", "backend developer",
+        "full stack developer", "ux/ui designer", "qa engineer", "qa tester", "product manager",
+        "project manager", "business analyst", "cybersecurity", "network engineer", "security engineer",
+    ]
+
+    # 6. Find which important keywords appear in user's skills
+    matched_keywords = [
+        kw for kw in important_keywords if any(kw in skill for skill in user_skills)
+    ]
+    if not matched_keywords:
+        return JSONResponse(
+            status_code=200,
+            content={"message": "No relevant job keywords found in user's skills."},
+        )
+
+    # 7. Build regex filters on description + title
+    regex_filters = [{"job_description": {"$regex": kw, "$options": "i"}} for kw in matched_keywords]
+    title_filters = [{"title": {"$regex": kw, "$options": "i"}} for kw in matched_keywords]
+
+    cursor = recommended_jobs_collection.find({"$or": regex_filters + title_filters})
+
+    # 8. Fetch up to 100 matches, then pick 9 at random
+    matched_jobs = await cursor.to_list(length=100)
+    if not matched_jobs:
+        return JSONResponse(
+            status_code=200,
+            content={"message": "No jobs found matching your key skills."},
+        )
+
+    # 9. Randomly select up to 9 and sanitize each one
+    selected = random.sample(matched_jobs, min(6, len(matched_jobs)))
+    sanitized = [sanitize_job(job) for job in selected]
+
+    # 10. Return recommendations
+    return JSONResponse(
+        status_code=200,
+        content=jsonable_encoder({
+            "message": "Jobs matched based on your skills.",
+            "jobs_returned": len(sanitized),
+            "recommended_jobs": sanitized,
+        }),
+    )
+    
+@app.get("/jobs-by-role")
+async def jobs_by_role(
+    job_role: str = Query(..., description="e.g., Python Developer, ML Engineer")
+):
+    """
+    Fetch up to 5 jobs from recommended_jobs based on job role.
+    Tries exact match first, then falls back to partial match (regex).
+    """
+
+    # Step 1: Try exact match
+    cursor = recommended_jobs_collection.find({"title": job_role}).limit(5)
+    jobs = []
+    async for doc in cursor:
+        doc["id"] = str(doc.pop("_id"))
+        jobs.append(doc)
+
+    # Step 2: Fallback to regex match if no exact match
+    if not jobs:
+        cursor = recommended_jobs_collection.find({
+            "title": {"$regex": job_role, "$options": "i"}
+        }).limit(5)
+        async for doc in cursor:
+            doc["id"] = str(doc.pop("_id"))
+            jobs.append(doc)
+
+    # Step 3: Still nothing found
+    if not jobs:
+        raise HTTPException(status_code=404, detail=f"No jobs found for role '{job_role}'")
+
+    # Step 4: Return results
+    return JSONResponse(
+        status_code=200,
+        content=jsonable_encoder({
+            "job_role": job_role,
+            "count": len(jobs),
+            "jobs": jobs
+        })
+    )
+    
 
 @app.post("/get-parse-resume")
 async def get_parse_resume(
@@ -286,9 +480,18 @@ async def get_parse_resume(
         }
 
         # Insert the resume data into MongoDB
-        resume_result = await resumes_collection.insert_one(resume_data)
-        resume_id = str(resume_result.inserted_id)
-        logger.info(f"Resume stored in MongoDB. Resume ID: {resume_id}")
+        update_result = await resumes_collection.update_one(
+            {"user_id": user_id}, {"$set": resume_data}, upsert=True
+        )
+        if update_result.upserted_id:
+            resume_id = str(update_result.upserted_id)
+            logger.info(f"Inserted new resume. Resume ID: {resume_id}")
+        else:
+            existing = await resumes_collection.find_one(
+                {"user_id": user_id}, {"_id": 1}
+            )
+            resume_id = str(existing["_id"])
+            logger.info(f"Updated existing resume. Resume ID: {resume_id}")
 
         # Return a cleaned and serializable response
         return JSONResponse(
@@ -328,13 +531,13 @@ async def get_all_jobs_endpoint(user_id: str):
 
 
 @app.get("/profile")
-async def user_profile(user_email: str):
+async def user_profile(user_id: str):
     try:
-        user = await users_collection.find_one({"email": user_email})
+        user = await users_collection.find_one({"_id": ObjectId(user_id)})
         if not user:
             raise HTTPException(status_code=404, detail="User not found")
 
-        resume = await resumes_collection.find_one({"user_id": str(user["_id"])})
+        resume = await resumes_collection.find_one({"user_id": user_id})
         if not resume:
             raise HTTPException(
                 status_code=404,
@@ -342,6 +545,7 @@ async def user_profile(user_email: str):
             )
 
         profile_data = {
+            "user_id":str(user["_id"]),
             "full_name": user.get("full_name", ""),
             "email": user.get("email", ""),
             "phone": resume.get("phone", "Not Provided"),
