@@ -10,6 +10,9 @@ import logging
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, EmailStr
 from passlib.context import CryptContext
+from datetime import datetime, timezone, timedelta
+
+
 from app.parser import parse_resume
 from app.scrapper import get_all_jobs
 
@@ -85,7 +88,14 @@ async def login(userlogin: UserLogin):
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid email or password"
         )
     user_id = str(user["_id"])
-    return {"message": "Login successful!", "user_id": user_id}
+    resume = await resumes_collection.find_one({"user_id": user_id})
+
+    user_id = str(user["_id"])
+    return {
+        "message": "Login successful!",
+        "user_id": user_id,
+        "resume_uploaded": bool(resume),
+    }
 
 
 # @app.post("/parse-resume/")
@@ -201,6 +211,20 @@ async def find_jobs(
         f"Location: {location}, Skills: {', '.join(skills) or 'Not provided'}"
     )
 
+    # First, check if the job_role already exists in the recommended_jobs_collection
+    existing_jobs = await recommended_jobs_collection.find(
+        {"role": {"$regex": f"^{job_role}$", "$options": "i"}}
+    ).to_list(length=5)
+
+    if existing_jobs:
+        logger.info(f"Found existing recommendations for job role: {job_role}")
+        response_content = {
+            "message": "Matching jobs fetched from the database.",
+            "jobs_found": len(existing_jobs),
+            "all_jobs": [convert_mongo_obj(job) for job in existing_jobs],
+        }
+        return JSONResponse(status_code=200, content=jsonable_encoder(response_content))
+        # If not found, call the get_all_jobs function to fetch from external API
     gemini_response = get_all_jobs(job_role, location, skills, experience_data)
     if not gemini_response:
         return JSONResponse(
@@ -209,8 +233,8 @@ async def find_jobs(
 
     jobs = []
     for job in gemini_response:
-        job["user_id"] = user_id
-        insertion_result = await job_collection.insert_one(job)
+        job["role"] = job_role
+        insertion_result = await recommended_jobs_collection.insert_one(job)
         job["_id"] = insertion_result.inserted_id  # Add generated _id
         jobs.append(convert_mongo_obj(job))  # Convert ObjectId to str
 
@@ -235,7 +259,7 @@ def clean_obj(obj):
         return str(obj)
     else:
         return obj
-    
+
 
 @app.post("/scrape-and-store-recommended-jobs")
 async def scrape_and_store_recommended_jobs(
@@ -276,6 +300,7 @@ async def scrape_and_store_recommended_jobs(
 
     stored_jobs = []
     for job in scraped_jobs:
+        job["role"] = job_role
         # Insert job into the recommended_jobs_collection
         result = await recommended_jobs_collection.insert_one(job)
         job["_id"] = result.inserted_id  # Add the inserted _id to the job data
@@ -291,8 +316,8 @@ async def scrape_and_store_recommended_jobs(
             }
         ),
     )
-    
-    
+
+
 def sanitize_job(doc: dict) -> dict:
     """
     Convert MongoDB document so it's JSON serializable:
@@ -340,14 +365,59 @@ async def get_recommended_jobs_for_user(
 
     # 5. Define important matching keywords
     important_keywords = [
-        "python", "java", "javascript", "c++", "c#", "go", "ruby", "php", "swift",
-        "kotlin", "django", "flask", "spring", "react", "angular", "vue", "node.js",
-        "express", "laravel", "docker", "kubernetes", "aws", "azure", "gcp", "devops",
-        "terraform", "ansible", "data analyst", "data scientist", "machine learning",
-        "ml engineer", "ai engineer", "r", "pandas", "numpy", "tensorflow", "pytorch",
-        "spark", "hadoop", "sql", "nosql", "frontend developer", "backend developer",
-        "full stack developer", "ux/ui designer", "qa engineer", "qa tester", "product manager",
-        "project manager", "business analyst", "cybersecurity", "network engineer", "security engineer",
+        "python",
+        "java",
+        "javascript",
+        "c++",
+        "c#",
+        "go",
+        "ruby",
+        "php",
+        "swift",
+        "kotlin",
+        "django",
+        "flask",
+        "spring",
+        "react",
+        "angular",
+        "vue",
+        "node.js",
+        "express",
+        "laravel",
+        "docker",
+        "kubernetes",
+        "aws",
+        "azure",
+        "gcp",
+        "devops",
+        "terraform",
+        "ansible",
+        "data analyst",
+        "data scientist",
+        "machine learning",
+        "ml engineer",
+        "ai engineer",
+        "r",
+        "pandas",
+        "numpy",
+        "tensorflow",
+        "pytorch",
+        "spark",
+        "hadoop",
+        "sql",
+        "nosql",
+        "frontend developer",
+        "backend developer",
+        "full stack developer",
+        "ux/ui designer",
+        "qa engineer",
+        "qa tester",
+        "product manager",
+        "project manager",
+        "business analyst",
+        "cybersecurity",
+        "network engineer",
+        "security engineer",
     ]
 
     # 6. Find which important keywords appear in user's skills
@@ -361,33 +431,56 @@ async def get_recommended_jobs_for_user(
         )
 
     # 7. Build regex filters on description + title
-    regex_filters = [{"job_description": {"$regex": kw, "$options": "i"}} for kw in matched_keywords]
-    title_filters = [{"title": {"$regex": kw, "$options": "i"}} for kw in matched_keywords]
+    regex_filters = [
+        {"job_description": {"$regex": kw, "$options": "i"}} for kw in matched_keywords
+    ]
+    title_filters = [
+        {"title": {"$regex": kw, "$options": "i"}} for kw in matched_keywords
+    ]
 
-    cursor = recommended_jobs_collection.find({"$or": regex_filters + title_filters})
+    # 8. Get the list of jobs the user has already applied for
+    applied_jobs = await job_collection.find(
+        {"user_id": user_id, "is_applied": True}
+    ).to_list(length=1000)
+    applied_job_ids = {job["_id"] for job in applied_jobs}
 
-    # 8. Fetch up to 100 matches, then pick 9 at random
+    # 9. Find jobs that match the filters but are not applied for
+    cursor = recommended_jobs_collection.find(
+        {
+            "$and": [
+                {"$or": regex_filters + title_filters},
+                {"_id": {"$nin": list(applied_job_ids)}},
+            ]
+        }
+    )
+
+    # 10. Fetch up to 100 matches, then pick 9 at random
     matched_jobs = await cursor.to_list(length=100)
     if not matched_jobs:
         return JSONResponse(
             status_code=200,
-            content={"message": "No jobs found matching your key skills."},
+            content={
+                "message": "No jobs found matching your key skills or you have already applied for all matching jobs."
+            },
         )
 
-    # 9. Randomly select up to 9 and sanitize each one
+    # 11. Randomly select up to 9 and sanitize each one
     selected = random.sample(matched_jobs, min(6, len(matched_jobs)))
     sanitized = [sanitize_job(job) for job in selected]
 
-    # 10. Return recommendations
+    # 12. Return recommendations
     return JSONResponse(
         status_code=200,
-        content=jsonable_encoder({
-            "message": "Jobs matched based on your skills.",
-            "jobs_returned": len(sanitized),
-            "recommended_jobs": sanitized,
-        }),
+        content=jsonable_encoder(
+            {
+                "message": "Jobs matched based on your skills.",
+                "jobs_returned": len(sanitized),
+                "recommended_jobs": sanitized,
+            }
+        ),
     )
-    
+
+
 @app.get("/jobs-by-role")
 async def jobs_by_role(
     job_role: str = Query(..., description="e.g., Python Developer, ML Engineer")
@@ -398,7 +491,7 @@ async def jobs_by_role(
     """
 
     # Step 1: Try exact match
-    cursor = recommended_jobs_collection.find({"title": job_role}).limit(5)
+    cursor = recommended_jobs_collection.find({"role": job_role}).limit(5)
     jobs = []
     async for doc in cursor:
         doc["id"] = str(doc.pop("_id"))
@@ -406,27 +499,27 @@ async def jobs_by_role(
 
     # Step 2: Fallback to regex match if no exact match
     if not jobs:
-        cursor = recommended_jobs_collection.find({
-            "title": {"$regex": job_role, "$options": "i"}
-        }).limit(5)
+        cursor = recommended_jobs_collection.find(
+            {"title": {"$regex": job_role, "$options": "i"}}
+        ).limit(5)
         async for doc in cursor:
             doc["id"] = str(doc.pop("_id"))
             jobs.append(doc)
 
     # Step 3: Still nothing found
     if not jobs:
-        raise HTTPException(status_code=404, detail=f"No jobs found for role '{job_role}'")
+        raise HTTPException(
+            status_code=404, detail=f"No jobs found for role '{job_role}'"
+        )
 
     # Step 4: Return results
     return JSONResponse(
         status_code=200,
-        content=jsonable_encoder({
-            "job_role": job_role,
-            "count": len(jobs),
-            "jobs": jobs
-        })
+        content=jsonable_encoder(
+            {"job_role": job_role, "count": len(jobs), "jobs": jobs}
+        ),
     )
-    
+
 
 @app.post("/get-parse-resume")
 async def get_parse_resume(
@@ -483,6 +576,11 @@ async def get_parse_resume(
         update_result = await resumes_collection.update_one(
             {"user_id": user_id}, {"$set": resume_data}, upsert=True
         )
+
+        await users_collection.update_one(
+            {"_id": user_obj_id}, {"$set": {"resume_uploaded": True}}
+        )
+
         if update_result.upserted_id:
             resume_id = str(update_result.upserted_id)
             logger.info(f"Inserted new resume. Resume ID: {resume_id}")
@@ -545,7 +643,7 @@ async def user_profile(user_id: str):
             )
 
         profile_data = {
-            "user_id":str(user["_id"]),
+            "user_id": str(user["_id"]),
             "full_name": user.get("full_name", ""),
             "email": user.get("email", ""),
             "phone": resume.get("phone", "Not Provided"),
@@ -570,6 +668,7 @@ async def apply_job(
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid user ID format")
 
+    # Check if the user exists
     user = await users_collection.find_one({"_id": user_obj_id})
     if not user:
         raise HTTPException(
@@ -581,15 +680,60 @@ async def apply_job(
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid job ID format")
 
-    update_result = await job_collection.update_one(
-        {"_id": job_obj_id, "user_id": user_id}, {"$set": {"applied": True}}
-    )
-    if update_result.modified_count == 0:
+    # Fetch the job from recommended_jobs_collection
+    job = await recommended_jobs_collection.find_one({"_id": job_obj_id})
+    if not job:
         raise HTTPException(
-            status_code=404, detail="Job not found or already marked as applied"
+            status_code=404, detail="Job not found in recommended jobs."
         )
 
-    return {"message": "Job marked as applied."}
+    # Check if the job already exists for this user and is applied
+    existing_job = await job_collection.find_one(
+        {"_id": job_obj_id, "user_id": user_id, "is_applied": True}
+    )
+    if existing_job:
+        raise HTTPException(
+            status_code=400, detail="Job is already marked as applied for this user."
+        )
+    IST = timezone(timedelta(hours=5, minutes=30))
+    # Capture timestamp
+    applied_at = datetime.now(IST).isoformat()  # ISO string in UTC
+
+    # Prepare the document to be inserted
+    applied_job_doc = {
+        "_id": job_obj_id,
+        "user_id": user_id,
+        "company": job.get("company"),
+        "description": job.get("description"),
+        "experience_required": job.get("experience_required"),
+        "link": job.get("link"),
+        "score": job.get("score"),
+        "site": job.get("site"),
+        "title": job.get("title"),
+        "is_applied": True,  # Mark as applied
+        "applied_at": applied_at,  # ← new
+    }
+
+    # Insert the job into job_collection
+    try:
+        insertion_result = await job_collection.insert_one(applied_job_doc)
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Error inserting job into collection: {str(e)}"
+        )
+
+    # Add the inserted job's ObjectId to the response document
+    applied_job_doc["_id"] = str(
+        insertion_result.inserted_id
+    )  # Ensure ObjectId is converted to string
+
+    return JSONResponse(
+        status_code=200,
+        content={
+            "message": "Job successfully marked as applied.",
+            "job": applied_job_doc,
+        },
+    )
 
 
 @app.get("/applied-jobs")
@@ -607,7 +751,7 @@ async def get_applied_jobs(
             status_code=404, detail="User not found. Please register first."
         )
 
-    jobs_cursor = job_collection.find({"user_id": user_id, "applied": True})
+    jobs_cursor = job_collection.find({"user_id": user_id, "is_applied": True})
     applied_jobs = []
     async for job in jobs_cursor:
         job["_id"] = str(job["_id"])

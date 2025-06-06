@@ -40,7 +40,7 @@ def setup_driver(headless=True):
     return driver
 
 
-def scrape_linkedin(driver, job_role, location, skills, max_jobs=10):
+def scrape_linkedin(driver, job_role, location, skills, max_jobs=4):
     """Scrape LinkedIn jobs ensuring all company names are unique"""
     try:
         url = f"https://www.linkedin.com/jobs/search/?keywords={urllib.parse.quote(job_role)}&location={urllib.parse.quote(location)}"
@@ -121,7 +121,7 @@ def scrape_linkedin(driver, job_role, location, skills, max_jobs=10):
         return []
 
 
-def scrape_naukri(driver, job_role, location, skills, max_jobs=10):
+def scrape_naukri(driver, job_role, location, skills, max_jobs=4):
     job_role_hyphen = job_role.lower().replace(" ", "-")
     job_role_encoded = urllib.parse.quote(job_role)
     location_encoded = urllib.parse.quote(location) if location else ""
@@ -187,12 +187,11 @@ def get_job_description(driver, job_link, site):
 def extract_tech_keywords(text):
     """
     Enhanced tech keyword extraction with:
-    - More comprehensive keyword list
+    - Comprehensive keyword list
     - Better matching (whole word matching)
-    - Skill categories
     """
     if not text or not isinstance(text, str):
-        return ""
+        return {}
 
     tech_keywords = {
         "Programming Languages": [
@@ -244,23 +243,40 @@ def extract_tech_keywords(text):
             "PyTorch",
         ],
         "APIs": ["REST", "GraphQL", "gRPC", "API", "Microservices"],
-        "Other": ["Git", "Linux", "Agile", "Scrum", "JIRA"],
+        "Other": [
+            "Git",
+            "Linux",
+            "Agile",
+            "Scrum",
+            "JIRA",
+            "VS Code",
+            "GitHub",
+            "Data Structures",
+            "Algorithms",
+            "OOPs",
+            "Employee Management System",
+            "IOT Based Smart Shopping Cart",
+            "Backend Developer",
+            "FastAPI"
+        ]
     }
 
     found_keywords = set()
     lower_text = text.lower()
 
-    for category, keywords in tech_keywords.items():
+    for keywords in tech_keywords.values():
         for keyword in keywords:
-            # Use regex for whole word matching to avoid false positives
             if re.search(r"\b" + re.escape(keyword.lower()) + r"\b", lower_text):
                 found_keywords.add(keyword)
 
-    return (
-        ", ".join(sorted(found_keywords))
-        if found_keywords
-        else "No specific tech requirements found"
-    )
+    # Convert to sorted list
+    found_keywords = sorted(list(found_keywords))
+
+    # Format the output as index-key format
+    formatted_output = {index: keyword for index, keyword in enumerate(found_keywords)}
+
+    return formatted_output if formatted_output else {}
+
 
 
 def extract_experience(text):
